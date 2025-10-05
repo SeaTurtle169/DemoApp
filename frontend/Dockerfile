@@ -1,74 +1,52 @@
 # syntax=docker/dockerfile:1
 
-# Comments are provided throughout this file to help you get started.
-# If you need more help, visit the Dockerfile reference guide at
-# https://docs.docker.com/go/dockerfile-reference/
-
-# Want to help us make this template better? Share your feedback here: https://forms.gle/ybq9Krt8jtBL3iCk7
-
-ARG NODE_VERSION=22.19.0
+ARG NODE_VERSION=22.18.0
 
 ################################################################################
-# Use node image for base image for all stages.
-FROM node:${NODE_VERSION}-alpine as base
+# Base stage
+FROM node:${NODE_VERSION}-alpine AS base
 
-# Set working directory for all build stages.
 WORKDIR /usr/src/app
 
-
 ################################################################################
-# Create a stage for installing production dependecies.
-FROM base as deps
+# Dependencies stage
+FROM base AS deps
 
-# Download dependencies as a separate step to take advantage of Docker's caching.
-# Leverage a cache mount to /root/.npm to speed up subsequent builds.
-# Leverage bind mounts to package.json and package-lock.json to avoid having to copy them
-# into this layer.
 RUN --mount=type=bind,source=package.json,target=package.json \
     --mount=type=bind,source=package-lock.json,target=package-lock.json \
     --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev
 
 ################################################################################
-# Create a stage for building the application.
-FROM deps as build
+# Build stage
+FROM base AS build
 
-# Download additional development dependencies before building, as some projects require
-# "devDependencies" to be installed to build. If you don't need this, remove this step.
 RUN --mount=type=bind,source=package.json,target=package.json \
     --mount=type=bind,source=package-lock.json,target=package-lock.json \
     --mount=type=cache,target=/root/.npm \
     npm ci
 
-# Copy the rest of the source files into the image.
 COPY . .
-# Run the build script.
 RUN npm run build
 
 ################################################################################
-# Create a new stage to run the application with minimal runtime dependencies
-# where the necessary files are copied from the build stage.
-FROM base as final
+# Final stage
+FROM node:${NODE_VERSION}-alpine AS final
 
-# Use production node environment by default.
-ENV NODE_ENV production
+# Use modern ENV syntax (no warning)
+ENV NODE_ENV=production
 
-# Run the application as a non-root user.
-USER node
+# Install missing system deps so `npm install -g serve` won't fail
+RUN apk add --no-cache bash curl
 
-# Copy package.json so that package manager commands can be used.
-COPY package.json .
+# Install static server
+RUN npm install -g serve
 
-# Copy the production dependencies from the deps stage and also
-# the built application from the build stage into the image.
-COPY --from=deps /usr/src/app/node_modules ./node_modules
+WORKDIR /usr/src/app
+
+# Copy only what's needed
 COPY --from=build /usr/src/app/build ./build
-COPY --from=build /usr/src/app/src ./src        
-COPY --from=build /usr/src/app/public ./public  
 
-
-# Expose the port that the application listens on.
 EXPOSE 3000
 
-# Run the application.
-CMD npm start
+CMD ["serve", "-s", "build", "-l", "3000"]
